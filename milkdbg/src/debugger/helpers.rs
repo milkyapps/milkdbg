@@ -30,6 +30,7 @@ pub fn parse_at<T: Clone>(addr: usize, process: winapi::um::winnt::HANDLE) -> Re
     Ok((*v).clone())
 }
 
+#[allow(dead_code)]
 pub fn parse<T: Clone>(addr: &mut usize, process: winapi::um::winnt::HANDLE) -> T {
     let buffer = read_process_memory(process, *addr, std::mem::size_of::<T>()).unwrap();
     let v: &T = unsafe { std::mem::transmute(buffer.as_ptr()) };
@@ -37,6 +38,7 @@ pub fn parse<T: Clone>(addr: &mut usize, process: winapi::um::winnt::HANDLE) -> 
     (*v).clone()
 }
 
+#[allow(dead_code)]
 pub fn read_unicode_string_char_by_char(
     process: winapi::um::winnt::HANDLE,
     mut addr: usize,
@@ -100,11 +102,13 @@ pub fn read_string_char_by_char_unchecked(
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum Value {
     U32(u32),
     String(String),
 }
 
+#[allow(dead_code)]
 pub fn read_value_from_stack(
     process: winapi::um::winnt::HANDLE,
     ctx: &winapi::um::winnt::WOW64_CONTEXT,
@@ -117,6 +121,7 @@ pub fn read_value_from_stack(
     Ok(Value::U32(v))
 }
 
+#[allow(dead_code)]
 pub fn read_value_from_stack_map<F, T>(
     process: winapi::um::winnt::HANDLE,
     ctx: &winapi::um::winnt::WOW64_CONTEXT,
@@ -131,6 +136,7 @@ where
     Ok(f(data))
 }
 
+#[allow(dead_code)]
 pub fn read_value_from_stack_as_ptr_to_string(
     process: winapi::um::winnt::HANDLE,
     ctx: &winapi::um::winnt::WOW64_CONTEXT,
@@ -142,6 +148,7 @@ pub fn read_value_from_stack_as_ptr_to_string(
     Ok(Value::String(s))
 }
 
+#[allow(dead_code)]
 pub fn try_read_string_char_by_char(
     process: winapi::um::winnt::HANDLE,
     mut addr: usize,
@@ -150,7 +157,7 @@ pub fn try_read_string_char_by_char(
         return Ok("".to_string());
     }
     let mut name = vec![];
-    for i in 0..16 {
+    for _ in 0..16 {
         match read_process_memory(process, addr, 1) {
             Ok(c) => {
                 if c[0] < 32 || c[0] >= 127 {

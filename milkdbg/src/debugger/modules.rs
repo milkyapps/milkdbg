@@ -7,13 +7,14 @@ use rust_lapper::*;
 type Iv = Interval<usize, usize>;
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct ModuleInfo {
     name: String,
     addr: usize,
     size: usize,
 }
 
-#[derive(Debug)]
+#[derive(serde::Serialize, Clone, Debug)]
 pub struct FunctionInfo {
     pub name: String,
     pub addr: usize,
@@ -36,7 +37,8 @@ impl Modules {
         self.modules_tree = Lapper::new(self.modules_intervals.clone());
     }
 
-    pub fn load_com(&mut self, api: &str, addr: usize) {
+    #[allow(dead_code)]
+    pub fn load_com(&mut self, _: &str, _: usize) {
         // if api == "d3d9" {
         //     let mut newfunctions = vec![];
 
@@ -65,7 +67,7 @@ impl Modules {
         let l = newfunctions.last().unwrap();
         ranges.push((l.0.clone(), l.1, 100));
         for (name, start, size) in ranges.iter() {
-            let end = start + size;
+            let _ = start + size;
 
             let size = if *size > 1000000 {
                 debug!(target:"modules", "Ignoring function {} because of size", name);
@@ -76,7 +78,6 @@ impl Modules {
             if let Ok(bytes) = read_process_memory(self.process.unwrap(), *start, size) {
                 let mut instructions = vec![];
 
-                use iced_x86::Formatter;
                 let mut decoder =
                     iced_x86::Decoder::new(32, bytes.as_slice(), iced_x86::DecoderOptions::NONE);
                 while decoder.can_decode() {
@@ -99,7 +100,7 @@ impl Modules {
             });
         }
 
-        if let Some(l) = newfunctions.last() {}
+        if let Some(_) = newfunctions.last() {}
 
         self.update();
     }
@@ -108,7 +109,7 @@ impl Modules {
         let process = self.process.unwrap();
 
         let dosheader = parse_at::<exe::headers::ImageDOSHeader>(base_addr, process)?;
-        let ntsignature = parse_at::<u32>(base_addr + (dosheader.e_lfanew.0 as usize), process)?;
+        let _ = parse_at::<u32>(base_addr + (dosheader.e_lfanew.0 as usize), process)?;
         let fileheader = parse_at::<exe::headers::ImageFileHeader>(
             base_addr + (dosheader.e_lfanew.0 as usize) + 4,
             process,
@@ -117,7 +118,7 @@ impl Modules {
         const IMAGE_DIRECTORY_ENTRY_EXPORT: usize = 0;
         // 32 bits
         let (export_datadir, export_dir) = if fileheader.machine == 0x014c {
-            let optional_header32 = parse_at::<exe::headers::ImageOptionalHeader32>(
+            let _ = parse_at::<exe::headers::ImageOptionalHeader32>(
                 base_addr
                     + (dosheader.e_lfanew.0 as usize)
                     + 4
@@ -173,7 +174,7 @@ impl Modules {
         let mut newfunctions = vec![];
 
         if export_dir.address_of_functions.0 != 0 {
-            let mut functions = parse_at_n::<u32>(
+            let functions = parse_at_n::<u32>(
                 base_addr + export_dir.address_of_functions.0 as usize,
                 process,
                 export_dir.number_of_functions as usize,
@@ -201,7 +202,7 @@ impl Modules {
                 if (addr >= export_datadir.virtual_address.0 as usize)
                     && (addr <= (export_datadir.virtual_address.0 + export_datadir.size) as usize)
                 {
-                    let exported_name = read_string_char_by_char(process, base_addr + addr);
+                    let _ = read_string_char_by_char(process, base_addr + addr);
                     // println!(
                     //     "\t\t[{:?}] aka [{}] @ 0x{:X?}",
                     //     exported_name,
@@ -244,6 +245,7 @@ impl Modules {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn build_modules_tree(&mut self) {
         unsafe {
             let process = self.process.unwrap();
@@ -271,7 +273,7 @@ impl Modules {
                 // println!("{:?}", m.modBaseAddr);
                 // println!("{:?}", m.modBaseSize);
 
-                self.load_module(
+                let _ = self.load_module(
                     m.modBaseAddr as usize,
                     m.modBaseSize as usize,
                     name.as_str(),
@@ -298,14 +300,17 @@ impl Modules {
         }
     }
 
+    #[allow(dead_code)]
     fn get_name(m: &winapi::um::tlhelp32::MODULEENTRY32) -> String {
         string_from_array_with_zero(&m.szModule[..])
     }
 
+    #[allow(dead_code)]
     fn get_path(m: &winapi::um::tlhelp32::MODULEENTRY32) -> String {
         string_from_array_with_zero(&m.szExePath[..])
     }
 
+    #[allow(dead_code)]
     pub fn get_module_at(&self, addr: usize) -> Option<&ModuleInfo> {
         let index = match self.modules.binary_search_by(|x| x.addr.cmp(&addr)) {
             Ok(index) => index as isize,
@@ -330,6 +335,7 @@ impl Modules {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_instructions_at(&self, addr: usize) -> Option<&(usize, Vec<Instruction>)> {
         let index = match self.opcodes.binary_search_by(|x| x.0.cmp(&addr)) {
             Ok(index) => index as isize,
@@ -342,6 +348,7 @@ impl Modules {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_instruction_at(&self, addr: usize) -> Option<(usize, &Instruction)> {
         let index = match self.opcodes.binary_search_by(|x| x.0.cmp(&addr)) {
             Ok(index) => index as isize,
@@ -351,19 +358,22 @@ impl Modules {
             let (mut eip, instructions) = self.opcodes.get(index as usize).unwrap();
             let mut idx = 0;
             loop {
-                let i = &instructions[idx];
-                if eip >= addr {
-                    break Some((eip, i));
+                if let Some(i) = instructions.get(idx) {
+                    if eip >= addr {
+                        break Some((eip, i));
+                    }
+                    eip += i.len();
+                    idx += 1;
+                } else {
+                    break None;
                 }
-
-                eip += i.len();
-                idx += 1;
             }
         } else {
             None
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_next_instruction_after(&self, addr: usize) -> Option<(usize, &Instruction)> {
         let index = match self.opcodes.binary_search_by(|x| x.0.cmp(&addr)) {
             Ok(index) => index as isize,
@@ -388,7 +398,7 @@ impl Modules {
 
     pub fn get_function_addr<S1: AsRef<str>, S2: AsRef<str>>(
         &self,
-        module: S1,
+        _: S1,
         symbol: S2,
     ) -> Option<usize> {
         let function = symbol.as_ref();

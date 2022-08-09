@@ -12,3 +12,17 @@ pub fn get_thread_context(
         }
     }
 }
+
+pub fn set_thread_context(
+    handle: winapi::um::winnt::HANDLE,
+    ctx: winapi::um::winnt::WOW64_CONTEXT,
+) -> Result<(), u32> {
+    unsafe {
+        let r = winapi::um::winbase::Wow64SetThreadContext(handle, &ctx);
+        if r != 0 {
+            Ok(())
+        } else {
+            Err(winapi::um::errhandlingapi::GetLastError())
+        }
+    }
+}

@@ -1,22 +1,45 @@
 mod debugger;
 mod helpers;
+pub mod known_api;
 mod modules;
 mod w32;
 mod wow64;
 
+use std::io::Write;
+
 use flume::*;
+
+use known_api::*;
+use log::kv::Source;
+
+use self::{debugger::ThreadContext, modules::FunctionInfo};
 
 #[derive(Debug)]
 pub enum Commands {
     Init(String, Sender<()>),
     Go(Sender<()>),
-    AddBreakpoint(String, Sender<()>),
+    GoUntilUsesMem(usize, Sender<()>),
+    Step(Sender<()>),
+    AddUnresolvedBreakpoint(String, bool, Sender<usize>), // symbol, once
+    AddBreakpoint(usize, bool, Sender<usize>),            // location, once
+    AddMemoryBreakpoint(usize, Sender<usize>),            // location
+    Print(Vec<serde_json::Value>, Sender<()>),
+    CurrentStackFrame(Sender<Option<KnownCall>>),
+    GetThreadContext(Sender<Option<ThreadContext>>),
+    ReadMemory(String, usize, Sender<serde_json::Value>), // type, addr
+    ReadArrayMemory(String, usize, usize, Sender<serde_json::Value>), // type, n, addr
+    GetCurrentInstructionString(Sender<String>),
+    WriteFile(String, Vec<u8>, Sender<()>),
+    GetFunctionAt(u64, Sender<KnownCall>),
 }
 
 pub fn spawn(cmds: Receiver<Commands>) {
     let (s, r) = unbounded();
 
     let _ = std::thread::spawn(move || -> ! {
+        let _ = std::fs::remove_file("print.txt");
+        let mut f = std::fs::File::create(".print").unwrap();
+        let mut f = std::io::BufWriter::new(f);
         let mut dbg = debugger::Debugger::new();
         loop {
             let cmd = r.recv();
@@ -24,22 +47,185 @@ pub fn spawn(cmds: Receiver<Commands>) {
                 Ok(Commands::Init(path, callback)) => {
                     dbg.start(path.as_str());
                     dbg.go();
-                    callback.send(());
+                    let _ = callback.send(());
                 }
                 Ok(Commands::Go(callback)) => {
                     dbg.go();
-                    callback.send(());
+                    let _ = callback.send(());
                 }
-                Ok(Commands::AddBreakpoint(at, callback)) => {
-                    if let Ok(addr) = usize::from_str_radix(at.as_str(), 16) {
-                        dbg.add_breakpoint_simple(addr);
-                    } else {
-                        dbg.add_breakpoint_symbol("", at.as_str());
-                    }
+                Ok(Commands::GoUntilUsesMem(addr, callback)) => {
+                    let a = dbg.add_breakpoint_memory(addr);
+                    loop {
+                        dbg.go();
 
+                        let ctx = dbg.get_current_thread_context();
+                        if ctx.dr6 != 0 {
+                            break;
+                        }
+
+                        // if let Some((_, i)) = dbg.get_current_instruction() {
+                        //     let call = dbg.get_function_at(addr as usize).unwrap_or_default();
+                        //     write!(f, "{:?}\n", call);
+
+                        //     let s = dbg.format_instruction(&i);
+                        //     write!(f, "{}\n", format!("0x{:X} {}", addr, s));
+                        //     if dbg.uses_mem(addr) {
+                        //         break;
+                        //     }
+                        // }
+                    }
+                    // loop {
+                    //     dbg.step();
+
+                    //     let ctx = dbg.get_current_thread_context();
+                    //     if ctx.ip > 0x70000000 {
+                    //         let addr: u32 = dbg.read_memory(ctx.sp as usize);
+                    //         dbg.add_breakpoint_simple(addr as usize, true);
+                    //     }
+
+                    //     if let Some((addr, i)) =
+                    //         dbg.get_current_instruction().map(|(x, i)| (x, i.clone()))
+                    //     {
+
+                    //     }
+                    // }
+                    // let _ = callback.send(());
+                }
+                Ok(Commands::Step(callback)) => {
+                    dbg.step();
+                    let _ = callback.send(());
+                }
+                Ok(Commands::AddUnresolvedBreakpoint(symbol, once, callback)) => {
+                    let i = if let Ok(addr) = usize::from_str_radix(symbol.as_str(), 16) {
+                        dbg.add_breakpoint_simple(addr, once)
+                    } else {
+                        dbg.add_breakpoint_symbol("", symbol.as_str())
+                        //TODO once
+                    };
+
+                    let _ = callback.send(i);
+                }
+                Ok(Commands::AddBreakpoint(location, once, callback)) => {
+                    let i = dbg.add_breakpoint_simple(location, once);
+                    let _ = callback.send(i);
+                }
+                Ok(Commands::AddMemoryBreakpoint(location, callback)) => {
+                    let i = dbg.add_breakpoint_memory(location);
+                    let _ = callback.send(i);
+                }
+                Ok(Commands::Print(arguments, callback)) => {
+                    use json_color::Colorizer;
+                    let colorizer = Colorizer::arbitrary();
+                    for arg in arguments {
+                        let s = match arg {
+                            serde_json::Value::String(s) => {
+                                // print!("{} ", s);
+                                write!(f, "{} ", s);
+                            }
+                            serde_json::Value::Number(n) => {
+                                let s = format!("{}", n);
+                                // print!("{} ", s);
+                                write!(f, "{} ", s);
+                            }
+                            x => {
+                                let s = x.to_string();
+                                write!(f, "{} ", s);
+                                // let s = colorizer.colorize_json_str(s.as_str()).unwrap();
+                                // print!("{} ", s);
+                            }
+                        };
+                    }
+                    // println!("");
+                    write!(f, "\n");
+                    // f.flush();
+                    let _ = callback.send(());
+                }
+                Ok(Commands::CurrentStackFrame(callback)) => {
+                    let call = dbg.get_current_known_call().map(|x| x.clone());
+                    let _ = callback.send(call);
+                }
+                Ok(Commands::GetThreadContext(callback)) => {
+                    let ctx = dbg.get_current_thread_context();
+                    let _ = callback.send(Some(ctx));
+                }
+                Ok(Commands::GetCurrentInstructionString(callback)) => {
+                    let s = if let Some((addr, i)) = dbg.get_current_instruction() {
+                        let s = dbg.format_instruction(i);
+                        format!("0x{:X} {}", addr, s)
+                    } else {
+                        format!("<ERROR>")
+                    };
+                    let _ = callback.send(s);
+                }
+                Ok(Commands::ReadMemory(t, addr, callback)) => {
+                    let v = match t.as_str() {
+                        "u8" | "U8" => {
+                            let v = dbg.read_memory::<u8>(addr);
+                            serde_json::Value::Number(v.into())
+                        }
+                        "u16" | "U16" => {
+                            let v = dbg.read_memory::<u16>(addr);
+                            serde_json::Value::Number(v.into())
+                        }
+                        "u32" | "U32" => {
+                            let v = dbg.read_memory::<u32>(addr);
+                            serde_json::Value::Number(v.into())
+                        }
+                        "f32" | "F32" => {
+                            let v = dbg.read_memory::<f32>(addr);
+                            serde_json::json!(v as f64)
+                        }
+                        _ => todo!(),
+                    };
+                    let _ = callback.send(v);
+                }
+                Ok(Commands::ReadArrayMemory(t, qty, addr, callback)) => {
+                    let v = match t.as_str() {
+                        "u8" | "U8" => {
+                            let v: Vec<serde_json::Value> = dbg
+                                .read_array_memory::<u8>(qty, addr)
+                                .iter()
+                                .map(|&x| serde_json::Value::Number(x.into()))
+                                .collect();
+                            serde_json::Value::Array(v)
+                        }
+                        "u16" | "U16" => {
+                            let v: Vec<serde_json::Value> = dbg
+                                .read_array_memory::<u16>(qty, addr)
+                                .iter()
+                                .map(|&x| serde_json::Value::Number(x.into()))
+                                .collect();
+                            serde_json::Value::Array(v)
+                        }
+                        "u32" | "U32" => {
+                            let v: Vec<serde_json::Value> = dbg
+                                .read_array_memory::<u32>(qty, addr)
+                                .iter()
+                                .map(|&x| serde_json::Value::Number(x.into()))
+                                .collect();
+                            serde_json::Value::Array(v)
+                        }
+                        "f32" | "F32" => {
+                            let v: Vec<serde_json::Value> = dbg
+                                .read_array_memory::<f32>(qty, addr)
+                                .iter()
+                                .map(|&x| serde_json::json!(x as f64))
+                                .collect();
+                            serde_json::Value::Array(v)
+                        }
+                        _ => todo!(),
+                    };
+                    let _ = callback.send(v);
+                }
+                Ok(Commands::WriteFile(path, bytes, callback)) => {
+                    let _ = std::fs::write(path, bytes.as_slice()).unwrap();
                     callback.send(());
                 }
-                Err(E) => todo!(),
+                Ok(Commands::GetFunctionAt(addr, callback)) => {
+                    let f = dbg.get_function_at(addr as usize).unwrap_or_default();
+                    callback.send(f);
+                }
+                Err(_) => todo!(),
             }
         }
     });
@@ -48,7 +234,7 @@ pub fn spawn(cmds: Receiver<Commands>) {
         let cmd = cmds.recv();
         match cmd {
             Ok(c) => {
-                s.send(c);
+                let _ = s.send(c);
             }
             x @ Err(_) => todo!("{:?}", x),
         }

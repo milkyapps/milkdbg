@@ -1,93 +1,85 @@
 use super::helpers::*;
+use super::known_api::*;
 use super::modules::Modules;
 use super::w32::*;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::thread::Thread;
 
 use log::debug;
 use log::trace;
 
-#[derive(Clone, Debug)]
-enum KnowCallValue {
-    U32(u32),
-    String(String),
+fn high_u8(v: u64) -> u8 {
+    ((v & 0xFF00) >> 8) as u8
 }
 
-#[derive(Clone, Debug)]
-struct KnowCall {
-    name: String,
-    args: Vec<KnowCallValue>,
+fn low_u8(v: u64) -> u8 {
+    (v & 0xFF) as u8
 }
 
-#[derive(Clone, Debug)]
-enum KnownApiArgLocation {
-    Memory(iced_x86::Register, isize),
+fn low_u16(v: u64) -> u16 {
+    (v & 0xFFFF) as u16
 }
 
-fn get_register_value(ctx: winapi::um::winnt::WOW64_CONTEXT, register: &iced_x86::Register) -> u32 {
-    match register {
-        iced_x86::Register::ESP => ctx.Esp,
-        _ => todo!(),
-    }
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ThreadContext {
+    pub ip: u64,
+    pub sp: u64,
+    pub bp: u64,
+    pub ax: u64,
+    pub bx: u64,
+    pub cx: u64,
+    pub dx: u64,
+    pub si: u64,
+    pub di: u64,
+    pub dr6: u64,
 }
 
-#[derive(Clone, Debug)]
-pub enum KnownApiArgType {
-    U32,
-    String,
-}
+impl ThreadContext {
+    pub fn get(&self, r: iced_x86::Register) -> u64 {
+        match r {
+            iced_x86::Register::EAX => self.ax,
+            iced_x86::Register::EBX => self.bx,
+            iced_x86::Register::ECX => self.cx,
+            iced_x86::Register::EDX => self.dx,
+            iced_x86::Register::ESP => self.sp,
+            iced_x86::Register::EBP => self.bp,
+            iced_x86::Register::ESI => self.si,
+            iced_x86::Register::EIP => self.ip,
+            iced_x86::Register::EDI => self.di,
 
-#[derive(Clone, Debug)]
-struct KnownApiArg {
-    pub location: KnownApiArgLocation,
-    t: KnownApiArgType,
-    name: String,
-}
+            iced_x86::Register::RAX => self.ax,
+            iced_x86::Register::RBX => self.bx,
+            iced_x86::Register::RCX => self.cx,
+            iced_x86::Register::RDX => self.dx,
+            iced_x86::Register::RSP => self.sp,
+            iced_x86::Register::RBP => self.bp,
+            iced_x86::Register::RSI => self.si,
+            iced_x86::Register::RIP => self.ip,
+            iced_x86::Register::RDI => self.di,
 
-impl KnownApiArg {
-    pub fn get_value(
-        &self,
-        process: winapi::um::winnt::HANDLE,
-        ctx: winapi::um::winnt::WOW64_CONTEXT,
-    ) -> KnowCallValue {
-        let addr = match &self.location {
-            KnownApiArgLocation::Memory(register, offset) => {
-                let addr = get_register_value(ctx, register);
-                ((addr as isize) - offset) as usize
-            }
-        };
+            iced_x86::Register::AH => high_u8(self.ax) as u64,
+            iced_x86::Register::BH => high_u8(self.bx) as u64,
+            iced_x86::Register::CH => high_u8(self.cx) as u64,
+            iced_x86::Register::DH => high_u8(self.dx) as u64,
 
-        match self.t {
-            KnownApiArgType::U32 => KnowCallValue::U32(parse_at(addr, process).unwrap()),
-            KnownApiArgType::String => {
-                let addr: u32 = parse_at(addr, process).unwrap();
-                KnowCallValue::String(read_string_char_by_char_unchecked(process, addr as usize).unwrap())
-            },
-        }
-    }
-}
+            iced_x86::Register::AL => low_u8(self.ax) as u64,
+            iced_x86::Register::BL => low_u8(self.bx) as u64,
+            iced_x86::Register::CL => low_u8(self.cx) as u64,
+            iced_x86::Register::DL => low_u8(self.dx) as u64,
 
-#[derive(Clone, Debug)]
-struct KnownApi {
-    name: String,
-    args: Vec<KnownApiArg>,
-}
+            iced_x86::Register::AX => low_u16(self.ax) as u64,
+            iced_x86::Register::BX => low_u16(self.bx) as u64,
+            iced_x86::Register::CX => low_u16(self.cx) as u64,
+            iced_x86::Register::DX => low_u16(self.dx) as u64,
+            iced_x86::Register::SI => low_u16(self.si) as u64,
+            iced_x86::Register::DI => low_u16(self.di) as u64,
+            iced_x86::Register::BP => low_u16(self.bp) as u64,
 
-impl KnownApi {
-    pub fn parse_know_call(
-        &self,
-        process: winapi::um::winnt::HANDLE,
-        thread: winapi::um::winnt::HANDLE,
-    ) -> KnowCall {
-        let ctx = super::wow64::get_thread_context(thread).unwrap();
-        KnowCall {
-            name: self.name.clone(),
-            args: self
-                .args
-                .iter()
-                .map(|x| x.get_value(process, ctx))
-                .collect(),
+            iced_x86::Register::None => 0,
+            x @ _ => todo!("{:?}", x),
         }
     }
 }
@@ -95,31 +87,43 @@ impl KnownApi {
 #[derive(Clone, Debug)]
 pub struct UnresolvedBreakpoint {
     symbol: String,
+    slot: usize,
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub enum Breakpoint {
     Simple {
         location: usize,
         original_value: Vec<u8>,
+        once: bool,
     },
     KnowApi {
         location: usize,
         original_value: Vec<u8>,
         api: KnownApi,
     },
+    Unresolved,
 }
 
 pub struct Debugger {
     process: winapi::um::winnt::HANDLE,
     pid: usize,
-    tid: usize,
-    last_debug_event: winapi::um::minwinbase::DEBUG_EVENT,
+    // tid: usize,
     modules: Modules,
+    known_apis: KnownApiDatabase,
 
     breakpoints_locations: HashMap<usize, usize>,
-    breakpoints: Vec<Breakpoint>,
+    pub breakpoints: Vec<Breakpoint>,
     unresolved_breakpoints: Vec<UnresolvedBreakpoint>,
+    breakpoint_entrypoint: Option<usize>,
+    reactivate_breakpoint: Option<usize>,
+
+    break_on_next_single_step: bool,
+
+    last_debug_event: winapi::um::minwinbase::DEBUG_EVENT,
+    current_tid: usize,
+    current_known_call: Option<KnownCall>,
 }
 
 impl Debugger {
@@ -127,13 +131,25 @@ impl Debugger {
         Self {
             process: std::ptr::null_mut(),
             pid: 0,
-            tid: 0,
+
             last_debug_event: winapi::um::minwinbase::DEBUG_EVENT::default(),
             modules: Modules::new(),
             breakpoints_locations: HashMap::new(),
             breakpoints: Vec::new(),
+            breakpoint_entrypoint: None,
             unresolved_breakpoints: Vec::new(),
+            reactivate_breakpoint: None,
+            known_apis: KnownApiDatabase::new(),
+
+            break_on_next_single_step: false,
+
+            current_tid: 0,
+            current_known_call: None,
         }
+    }
+
+    pub fn get_current_known_call(&self) -> Option<&KnownCall> {
+        self.current_known_call.as_ref()
     }
 
     fn set_cc(&self, location: usize) -> Vec<u8> {
@@ -144,14 +160,38 @@ impl Debugger {
         original_value
     }
 
-    pub fn add_breakpoint_simple(&mut self, location: usize) {
+    pub fn add_breakpoint_simple(&mut self, location: usize, once: bool) -> usize {
         let original_value = self.set_cc(location);
         self.breakpoints_locations
             .insert(location, self.breakpoints.len());
         self.breakpoints.push(Breakpoint::Simple {
             location,
             original_value,
+            once,
         });
+        self.breakpoints.len() - 1
+    }
+
+    pub fn add_breakpoint_memory(&mut self, location: usize) -> usize {
+        let handle = open_thread(
+            OpenThreadAccess::GET_CONTEXT | OpenThreadAccess::SET_CONTEXT,
+            false,
+            self.current_tid as u32,
+        )
+        .unwrap();
+
+        if is_wow64_process(handle) {
+            let mut ctx = super::wow64::get_thread_context(handle).unwrap();
+            ctx.Dr0 = location as u32;
+            ctx.Dr7 |= 1;
+            ctx.Dr7 &= 0xFFF0FFFF;
+            ctx.Dr6 = 0;
+            super::wow64::set_thread_context(handle, ctx);
+        } else {
+            todo!();
+        }
+
+        0
     }
 
     pub fn add_breakpoint_knownapi(&mut self, location: usize, api: KnownApi) {
@@ -166,14 +206,22 @@ impl Debugger {
         });
     }
 
-    pub fn add_breakpoint_symbol(&mut self, _module: &str, symbol: &str) {
+    pub fn add_breakpoint_symbol(&mut self, _module: &str, symbol: &str) -> usize {
+        self.breakpoints.push(Breakpoint::Unresolved);
+        let slot = self.breakpoints.len() - 1;
+
         self.unresolved_breakpoints.push(UnresolvedBreakpoint {
             symbol: symbol.to_string(),
+            slot,
         });
         self.try_resolve_breakpoints();
+
+        slot
     }
 
     pub fn start(&mut self, path: &str) {
+        debug!(target:"debugger", "path: {}", path);
+
         let pe = milk_pe_parser::PE::parse(path).unwrap();
         let entry_point = pe.optional.get_address_of_entry_point().to_va(0x400000);
 
@@ -188,7 +236,6 @@ impl Debugger {
         let mut parent = parent.to_string();
         parent.push('\0');
 
-        debug!(target:"debugger", "path: {:?}", path);
         debug!(target:"debugger", "working directory: {:?}", parent);
 
         unsafe {
@@ -210,12 +257,12 @@ impl Debugger {
 
             self.process = process_info.hProcess;
             self.pid = process_info.dwProcessId as usize;
-            self.tid = process_info.dwThreadId as usize;
+            self.current_tid = process_info.dwThreadId as usize;
 
             debug!(target:"debugger", "pid: {}", process_info.dwProcessId);
             debug!(target:"debugger", "tid: {}", process_info.dwThreadId);
             debug!(target:"debugger", "entrypoint at: 0x{:X?}", entry_point);
-            // self.add_breakpoint_addr(entry_point);
+            self.breakpoint_entrypoint = Some(entry_point);
 
             self.attach(self.pid);
             self.resume_tread(process_info.hThread);
@@ -233,7 +280,7 @@ impl Debugger {
         trace!(target:"debugger", "attach - begin");
 
         self.pid = pid;
-        let r = debug_active_process(self.pid);
+        let _ = debug_active_process(self.pid);
 
         trace!(target:"debugger", "attach - end");
     }
@@ -265,6 +312,12 @@ impl Debugger {
         trace!(target:"debugger", "continue_debug_event - end");
     }
 
+    pub fn step(&mut self) {
+        self.turnon_single_step(self.current_tid as u32, None);
+        self.break_on_next_single_step = true;
+        self.go();
+    }
+
     pub fn go(&mut self) {
         trace!(target:"debugger", "go - begin");
 
@@ -280,7 +333,7 @@ impl Debugger {
             match e {
                 Ok(e) => {
                     self.last_debug_event = e;
-                    let tid = self.last_debug_event.dwThreadId;
+                    self.current_tid = self.last_debug_event.dwThreadId as usize;
 
                     use winapi::um::minwinbase::*;
                     match e.dwDebugEventCode {
@@ -303,12 +356,17 @@ impl Debugger {
                             debug!(target:"debugger", "Process: {} at {:?}", module_name, path);
 
                             self.modules.process = Some(info.hProcess);
-                            self.modules.load_module(
+                            let _ = self.modules.load_module(
                                 info.lpBaseOfImage as usize,
                                 size as usize,
                                 module_name.as_str(),
                             );
                             self.try_resolve_breakpoints();
+
+                            // if let Some(entry_point) = info.lpStartAddress {
+                            //     self.add_breakpoint_once(entry_point as usize);
+                            //     println!("{:?}", self.breakpoints.last());
+                            // }
                         }
                         CREATE_THREAD_DEBUG_EVENT => {}
                         EXCEPTION_DEBUG_EVENT => {
@@ -325,36 +383,33 @@ impl Debugger {
                                     println!("\tEXCEPTION_ARRAY_BOUNDS_EXCEEDED")
                                 }
                                 EXCEPTION_BREAKPOINT | 1073741855 => {
-                                    debug!(target:"debugger", "Breakpoint hit at 0x{:08X}", addr);
-
-                                    let thread_handle = open_thread(
-                                        OpenThreadAccess::GET_CONTEXT
-                                            | OpenThreadAccess::SET_CONTEXT,
-                                        false,
-                                        tid,
-                                    )
-                                    .unwrap();
-
-                                    if let Some(b) = self
+                                    // Check we care about this breakpoint
+                                    if let Some((i, b)) = self
                                         .breakpoints_locations
                                         .get(&addr)
-                                        .and_then(|i| self.breakpoints.get(*i))
+                                        .and_then(|i| self.breakpoints.get(*i).map(|b| (*i, b)))
                                     {
+                                        debug!(target:"debugger", "Breakpoint hit at 0x{:08X}", addr);
+                                        self.restore_original(b);
+                                        let _ = self.turnon_single_step(
+                                            self.current_tid as u32,
+                                            Some(addr as u64),
+                                        );
+                                        self.reactivate_breakpoint = Some(i);
                                         match b {
-                                            Breakpoint::KnowApi {
-                                                location,
-                                                original_value,
-                                                api,
-                                            } => {
-                                                let call = api
-                                                    .parse_know_call(self.process, thread_handle);
-                                                println!("Know Call: {:?}", call);
+                                            Breakpoint::KnowApi { api, .. } => {
+                                                let call = api.parse_know_call(
+                                                    self.process,
+                                                    self.current_tid as u32,
+                                                );
+                                                debug!(target:"debugger", "Know Call: {:?}", call);
+                                                self.current_known_call = Some(call);
                                             }
                                             _ => {}
-                                        }
-                                    }
+                                        };
 
-                                    break;
+                                        break;
+                                    }
                                 }
                                 EXCEPTION_DATATYPE_MISALIGNMENT => {
                                     println!("\tEXCEPTION_DATATYPE_MISALIGNMENT")
@@ -400,7 +455,20 @@ impl Debugger {
                                     println!("\tEXCEPTION_PRIV_INSTRUCTION")
                                 }
                                 EXCEPTION_SINGLE_STEP | 1073741854 => {
-                                    // println!("\tEXCEPTION_SINGLE_STEP");
+                                    let _ = self.turnoff_single_step(self.current_tid as u32, None);
+                                    if let Some(b) = self
+                                        .reactivate_breakpoint
+                                        .and_then(|index| self.breakpoints.get(index))
+                                    {
+                                        self.reactivate_breakpoint(b);
+                                    }
+
+                                    if self.break_on_next_single_step {
+                                        self.break_on_next_single_step = false;
+                                        break;
+                                    } else {
+                                        self.break_on_next_single_step = false;
+                                    }
                                 }
                                 EXCEPTION_STACK_OVERFLOW => println!("\tEXCEPTION_STACK_OVERFLOw"),
                                 winapi::um::winnt::DBG_CONTROL_C => println!("\tDBG_CONTROL_C"),
@@ -421,7 +489,7 @@ impl Debugger {
 
                             let imagename = unsafe {
                                 let mut buffer = vec![0u8; 1024];
-                                let r = winapi::um::fileapi::GetFinalPathNameByHandleA(
+                                let _ = winapi::um::fileapi::GetFinalPathNameByHandleA(
                                     info.hFile,
                                     buffer.as_mut_ptr() as *mut i8,
                                     1024,
@@ -436,7 +504,7 @@ impl Debugger {
                             };
                             debug!(target:"debugger", "Loading @ {:X?}: {}", info.lpBaseOfDll, imagename.as_str());
 
-                            self.modules.load_module(
+                            let _ = self.modules.load_module(
                                 info.lpBaseOfDll as usize,
                                 filesize as usize,
                                 imagename.as_str(),
@@ -444,7 +512,23 @@ impl Debugger {
                             self.try_resolve_breakpoints();
                         }
                         OUTPUT_DEBUG_STRING_EVENT => {
-                            debug!(target:"debugger", "OUTPUT_DEBUG_STRING_EVENT");
+                            // println!("OUTPUT_DEBUG_STRING_EVENT");
+
+                            let info = unsafe { e.u.DebugString() };
+                            // lpDebugStringData: LPSTR
+                            // fUnicode: WORD
+                            // nDebugStringLength: WORD
+
+                            let r = read_process_memory(
+                                self.process,
+                                info.lpDebugStringData as usize,
+                                info.nDebugStringLength as usize,
+                            )
+                            .unwrap();
+                            let r = std::ffi::CStr::from_bytes_with_nul(r.as_slice()).unwrap();
+                            let r = r.to_str().unwrap();
+
+                            debug!(target:"debugger", "Output: {}", r);
                         }
                         RIP_EVENT => {
                             debug!(target:"debugger", "RIP_EVENT");
@@ -463,21 +547,6 @@ impl Debugger {
         trace!(target:"debugger", "go - end");
     }
 
-    fn get_knowapi(&self, name: &str) -> Option<KnownApi> {
-        if name == "CreateFileA" {
-            Some(KnownApi {
-                name: name.to_string(),
-                args: vec![KnownApiArg {
-                    location: KnownApiArgLocation::Memory(iced_x86::Register::ESP, -4),
-                    name: "lpFileName".to_string(),
-                    t: KnownApiArgType::String
-                }],
-            })
-        } else {
-            None
-        }
-    }
-
     fn try_resolve_breakpoints(&mut self) {
         let mut still_unresolved = vec![];
         let mut f = self.unresolved_breakpoints.clone();
@@ -490,11 +559,12 @@ impl Debugger {
                     if let Some(api) = self
                         .modules
                         .get_function_at(addr)
-                        .and_then(|info| self.get_knowapi(&info.name))
+                        .and_then(|info| self.known_apis.get_by_name(&info.name))
+                        .map(|x| x.clone())
                     {
                         self.add_breakpoint_knownapi(addr, api)
                     } else {
-                        self.add_breakpoint_simple(addr);
+                        self.add_breakpoint_simple(addr, false);
                     }
                     true
                 }
@@ -507,5 +577,282 @@ impl Debugger {
         }
 
         self.unresolved_breakpoints = still_unresolved;
+    }
+
+    pub fn reactivate_breakpoint(&self, b: &Breakpoint) {
+        let location = match b {
+            Breakpoint::Simple { location, once, .. } => {
+                if *once {
+                    None
+                } else {
+                    Some(*location)
+                }
+            }
+            Breakpoint::KnowApi { location, .. } => Some(*location),
+            Breakpoint::Unresolved => None,
+        };
+        if let Some(location) = location {
+            self.set_cc(location);
+        }
+    }
+
+    pub fn restore_original(&self, b: &Breakpoint) {
+        match b {
+            Breakpoint::Simple {
+                location,
+                original_value,
+                ..
+            } => {
+                let _ = write_process_memory(self.process, *location, original_value.as_slice())
+                    .unwrap();
+            }
+            Breakpoint::KnowApi {
+                location,
+                original_value,
+                ..
+            } => {
+                let _ = write_process_memory(self.process, *location, original_value.as_slice())
+                    .unwrap();
+            }
+            Breakpoint::Unresolved => {}
+        }
+    }
+
+    pub fn get_current_thread_context(&self) -> ThreadContext {
+        let h = open_thread(
+            OpenThreadAccess::GET_CONTEXT | OpenThreadAccess::SET_CONTEXT,
+            false,
+            self.current_tid as u32,
+        )
+        .unwrap();
+
+        if is_wow64_process(h) {
+            let mut ctx = super::wow64::get_thread_context(h).unwrap();
+            ThreadContext {
+                sp: ctx.Esp as u64,
+                bp: ctx.Ebp as u64,
+                ip: ctx.Eip as u64,
+                ax: ctx.Eax as u64,
+                bx: ctx.Ebx as u64,
+                cx: ctx.Ecx as u64,
+                dx: ctx.Edx as u64,
+                si: ctx.Esi as u64,
+                di: ctx.Edi as u64,
+                dr6: ctx.Dr6 as u64,
+            }
+        } else {
+            todo!();
+        }
+    }
+
+    fn turnon_single_step(&self, tid: u32, addr: Option<u64>) -> Result<(), u32> {
+        let h = open_thread(
+            OpenThreadAccess::GET_CONTEXT | OpenThreadAccess::SET_CONTEXT,
+            false,
+            tid,
+        )
+        .unwrap();
+
+        if is_wow64_process(h) {
+            let mut ctx = super::wow64::get_thread_context(h).unwrap();
+            if let Some(addr) = addr {
+                ctx.Eip = addr as u32;
+            }
+            ctx.EFlags |= 0x100;
+            super::wow64::set_thread_context(h, ctx).unwrap();
+        } else {
+            let mut ctx = get_thread_context(h)?;
+            if let Some(addr) = addr {
+                ctx.Rip = addr;
+            }
+            ctx.EFlags |= 0x100;
+            set_thread_context(h, ctx)?;
+        }
+
+        Ok(())
+    }
+
+    fn turnoff_single_step(&self, tid: u32, addr: Option<u64>) -> Result<(), u32> {
+        match open_thread(
+            OpenThreadAccess::GET_CONTEXT | OpenThreadAccess::SET_CONTEXT,
+            false,
+            tid,
+        ) {
+            Ok(h) => {
+                if is_wow64_process(h) {
+                    let mut ctx = super::wow64::get_thread_context(h).unwrap();
+                    if let Some(addr) = addr {
+                        ctx.Eip = addr as u32;
+                    }
+                    ctx.EFlags &= !0x100;
+                    super::wow64::set_thread_context(h, ctx).unwrap();
+                } else {
+                    let mut ctx = get_thread_context(h)?;
+                    if let Some(addr) = addr {
+                        ctx.Rip = addr;
+                    }
+                    ctx.EFlags &= !0x100;
+                    set_thread_context(h, ctx)?;
+                }
+            }
+            Err(_) => todo!(),
+        }
+
+        Ok(())
+    }
+
+    pub fn read_memory<T: Clone>(&self, addr: usize) -> T {
+        parse_at(addr, self.process).unwrap()
+    }
+
+    pub fn read_array_memory<T: Clone>(&self, qty: usize, addr: usize) -> Vec<T> {
+        parse_at_n(addr, self.process, qty).unwrap()
+    }
+
+    pub fn get_current_instruction(&self) -> Option<(usize, &iced_x86::Instruction)> {
+        let ctx = self.get_current_thread_context();
+        self.modules.get_instruction_at(ctx.ip as usize)
+    }
+
+    pub fn op0_uses_mem(
+        &self,
+        ctx: &ThreadContext,
+        i: &iced_x86::Instruction,
+        mem_addr: usize,
+    ) -> bool {
+        match i.op0_kind() {
+            iced_x86::OpKind::Memory => {
+                let base = ctx.get(i.memory_base());
+                let displacement = i.memory_displacement32();
+                let addr = base as usize + displacement as usize;
+                addr == mem_addr
+            }
+            _ => false,
+        }
+    }
+
+    pub fn op1_uses_mem(
+        &self,
+        ctx: &ThreadContext,
+        i: &iced_x86::Instruction,
+        mem_addr: usize,
+    ) -> bool {
+        match i.op1_kind() {
+            iced_x86::OpKind::Memory => {
+                let base = ctx.get(i.memory_base());
+                let displacement = i.memory_displacement32();
+                let addr = base as usize + displacement as usize;
+                addr == mem_addr
+            }
+            _ => false,
+        }
+    }
+
+    pub fn format_op0(&self, ctx: &ThreadContext, i: &iced_x86::Instruction, std: &mut String) {
+        match i.op0_kind() {
+            iced_x86::OpKind::Memory => {
+                let base = ctx.get(i.memory_base());
+                let displacement = i.memory_displacement32();
+                let addr = base as usize + displacement as usize;
+                let v: Result<u32, u32> = parse_at(addr, self.process);
+                std.push_str(format!(" - mem[{}]={:?}", addr, v).as_str());
+            }
+            iced_x86::OpKind::Register => {
+                let r = i.op0_register();
+                let v = ctx.get(r);
+                std.push_str(format!(" - {:?}={}", r, v).as_str());
+            }
+            _ => {}
+        }
+    }
+
+    pub fn format_op1(&self, ctx: &ThreadContext, i: &iced_x86::Instruction, std: &mut String) {
+        match i.op1_kind() {
+            iced_x86::OpKind::Memory => {
+                let base = ctx.get(i.memory_base());
+                let displacement = i.memory_displacement32();
+                let addr = base as usize + displacement as usize;
+                let v: Result<u32, u32> = parse_at(addr, self.process);
+                std.push_str(format!("- mem[{}]={:?}", addr, v).as_str());
+            }
+            iced_x86::OpKind::Register => {
+                let r = i.op1_register();
+                let v = ctx.get(r);
+                std.push_str(format!("- {:?}={}", r, v).as_str());
+            }
+            _ => {}
+        }
+    }
+
+    pub fn format_op0_as_float(
+        &self,
+        ctx: &ThreadContext,
+        i: &iced_x86::Instruction,
+        std: &mut String,
+    ) {
+        match i.op0_kind() {
+            iced_x86::OpKind::Memory => {
+                let base = ctx.get(i.memory_base());
+                let displacement = i.memory_displacement32();
+                let addr = base as usize + displacement as usize;
+                let v: Result<u32, u32> = parse_at(addr, self.process);
+                if let Ok(v) = v {
+                    let v: f32 = unsafe { std::mem::transmute(v) };
+                    std.push_str(format!(" - mem[{}]={:?}", addr, v).as_str());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn uses_mem(&self, addr: usize) -> bool {
+        match self.get_current_instruction() {
+            Some((_, i)) => {
+                let ctx = self.get_current_thread_context();
+                self.op0_uses_mem(&ctx, i, addr) || self.op1_uses_mem(&ctx, i, addr)
+            }
+            None => false,
+        }
+    }
+
+    pub fn format_instruction(&self, i: &iced_x86::Instruction) -> String {
+        let ctx = self.get_current_thread_context();
+
+        use iced_x86::Formatter;
+        let mut output = String::new();
+        let mut formatter = iced_x86::NasmFormatter::new();
+        formatter.format(&i, &mut output);
+
+        use iced_x86::Mnemonic::*;
+        match i.mnemonic() {
+            Mov | Movzx | Add | Sub | Xor | Mul | Imul | And | Or | Shl | Shr | Test | Cmp
+            | Lea => {
+                self.format_op0(&ctx, i, &mut output);
+                self.format_op1(&ctx, i, &mut output);
+            }
+            Push | Pop => {
+                self.format_op0(&ctx, i, &mut output);
+            }
+            Fld => {
+                self.format_op0_as_float(&ctx, i, &mut output);
+            }
+            Fst | Fstp => {
+                self.format_op0_as_float(&ctx, i, &mut output);
+            }
+            _ => {}
+        }
+
+        output
+    }
+
+    pub fn get_function_at(&self, addr: usize) -> Option<KnownCall> {
+        let f = self.modules.get_function_at(addr)?;
+        match self.known_apis.get_by_name(&f.name).map(Clone::clone) {
+            Some(f) => Some(f.parse_know_call(self.process, self.current_tid as u32)),
+            None => Some(KnownCall {
+                name: f.name.clone(),
+                args: Default::default(),
+            }),
+        }
     }
 }

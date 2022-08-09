@@ -3,13 +3,10 @@ mod helpers;
 
 use auto_from::From;
 use headers::*;
-use std::{
-    path::{Component, Path},
-    str::Utf8Error,
-};
+use std::{path::Path, str::Utf8Error};
 
-#[auto_from]
 #[derive(Debug, From)]
+#[auto_from]
 pub enum ParseError {
     IO(std::io::Error),
     UTF8(Utf8Error),

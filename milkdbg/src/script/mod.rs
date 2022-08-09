@@ -2,33 +2,14 @@ use flume::Sender;
 
 mod js;
 
-#[derive(Debug)]
-pub enum Value {
-    String(String),
-}
-
-impl Value {
-    pub fn to_string(&self) -> String {
-        match self {
-            Value::String(s) => s.clone(),
-        }
-    }
-}
-
-impl From<String> for Value {
-    fn from(s: String) -> Self {
-        Value::String(s)
-    }
-}
-
 pub enum Commands {
-    Resolve(u32, String), //resolver, value
+    Resolve(u32, serde_json::Value), //resolver, value
     Run(String, Sender<()>),
 }
 
 #[derive(Debug)]
 pub enum Events {
-    NativeCode(u32, String, Vec<Value>), // resolver, function, arguments
+    NativeCode(u32, String, Vec<serde_json::Value>), // resolver, function, arguments
 }
 
 pub struct Script {
@@ -37,7 +18,7 @@ pub struct Script {
 
 impl Script {
     pub async fn send_async(&mut self, cmd: Commands) {
-        self.sender.send_async(cmd).await;
+        let _ = self.sender.send_async(cmd).await;
     }
 }
 

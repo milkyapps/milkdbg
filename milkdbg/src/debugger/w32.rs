@@ -11,6 +11,7 @@ pub fn debug_active_process(pid: usize) -> Result<(), u32> {
 }
 
 //https://docs.microsoft.com/en-us/windows/win32/api/debugapi/nf-debugapi-debugactiveprocessstop
+#[allow(dead_code)]
 pub fn debug_active_process_stop(pid: usize) -> Result<(), u32> {
     unsafe {
         let r = winapi::um::debugapi::DebugActiveProcessStop(pid as u32);
