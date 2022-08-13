@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1.20.1", features = ["macros"] }
-log = "0.4.14"
+async-std = { version = "1.12", features = ["attributes"] }
+log = "0.4.17"
 pretty_env_logger = "0.4.0"
 rustyline = "9.0.0"
 rusty_v8 = "0.31.0"

@@ -28,7 +28,8 @@ fn get_register_value(ctx: winapi::um::winnt::WOW64_CONTEXT, register: &iced_x86
 #[allow(dead_code)]
 pub enum KnownApiArgType {
     U32,
-    String,
+    UTF8String,
+    UTF16String,
 }
 
 #[derive(Clone, Debug)]
@@ -57,10 +58,16 @@ impl KnownApiArg {
                 let n: u32 = parse_at(addr, process).unwrap();
                 serde_json::Value::Number(n.into())
             }
-            KnownApiArgType::String => {
+            KnownApiArgType::UTF8String => {
                 let addr: u32 = parse_at(addr, process).unwrap();
                 serde_json::Value::String(
-                    read_string_char_by_char_unchecked(process, addr as usize).unwrap(),
+                    read_utf8_string_char_by_char_unchecked(process, addr as usize).unwrap(),
+                )
+            }
+            KnownApiArgType::UTF16String => {
+                let addr: u32 = parse_at(addr, process).unwrap();
+                serde_json::Value::String(
+                    read_utf16_string_char_by_char_unchecked(process, addr as usize).unwrap(),
                 )
             }
         }
@@ -121,7 +128,8 @@ impl KnownApiDatabase {
                             let name = p["Name"].as_str().unwrap().to_string();
                             let t = p["Type"]["Name"].as_str().unwrap_or("NOTYPE").to_string();
                             let t = match t.as_str() {
-                                "PSTR" => KnownApiArgType::String,
+                                "PSTR" => KnownApiArgType::UTF8String,
+                                "PWSTR" => KnownApiArgType::UTF16String,
                                 _ => KnownApiArgType::U32,
                             };
                             args.push(KnownApiArg {

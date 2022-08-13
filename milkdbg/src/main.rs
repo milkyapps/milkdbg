@@ -178,7 +178,7 @@ pub struct Args {
 
 async fn run_repl(_: Args, mut script: Script) {
     let mut rl = rustyline::Editor::<()>::new();
-    let _ = rl.load_history("history.txt");
+    let _ = rl.load_history("~/.milkdbghistory.txt");
     loop {
         let readline = rl.readline("> ");
         match readline {
@@ -191,7 +191,7 @@ async fn run_repl(_: Args, mut script: Script) {
             Err(_) => break,
         }
     }
-    let _ = rl.append_history("history.txt");
+    let _ = rl.append_history("~/.milkdbghistory.txt");
 }
 
 async fn run_script(args: Args, mut script: Script) {

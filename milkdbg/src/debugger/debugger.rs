@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::thread::Thread;
 
 use log::debug;
 use log::trace;
@@ -84,10 +83,16 @@ impl ThreadContext {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UnresolvedBreakpoint {
     symbol: String,
     slot: usize,
+}
+
+impl std::fmt::Debug for UnresolvedBreakpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UnresolvedBreakpoint").field("symbol", &self.symbol).field("slot", &self.slot).finish()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -186,7 +191,7 @@ impl Debugger {
             ctx.Dr7 |= 1;
             ctx.Dr7 &= 0xFFF0FFFF;
             ctx.Dr6 = 0;
-            super::wow64::set_thread_context(handle, ctx);
+            let _ = super::wow64::set_thread_context(handle, ctx);
         } else {
             todo!();
         }
@@ -207,6 +212,8 @@ impl Debugger {
     }
 
     pub fn add_breakpoint_symbol(&mut self, _module: &str, symbol: &str) -> usize {
+        debug!("add_breakpoint_symbol: {}", symbol);
+
         self.breakpoints.push(Breakpoint::Unresolved);
         let slot = self.breakpoints.len() - 1;
 
@@ -313,7 +320,7 @@ impl Debugger {
     }
 
     pub fn step(&mut self) {
-        self.turnon_single_step(self.current_tid as u32, None);
+        let _ = self.turnon_single_step(self.current_tid as u32, None);
         self.break_on_next_single_step = true;
         self.go();
     }
@@ -554,7 +561,7 @@ impl Debugger {
         for b in f.drain(..) {
             let resolved = match self.modules.get_function_addr("", &b.symbol) {
                 Some(addr) => {
-                    debug!(target:"debugger", "Breakpoint {:?} at 0x{:X}", b.symbol, addr);
+                    debug!(target:"debugger", "New breakpoint resolved: {:?} at 0x{:X}", b.symbol, addr);
 
                     if let Some(api) = self
                         .modules
@@ -627,7 +634,7 @@ impl Debugger {
         .unwrap();
 
         if is_wow64_process(h) {
-            let mut ctx = super::wow64::get_thread_context(h).unwrap();
+            let ctx = super::wow64::get_thread_context(h).unwrap();
             ThreadContext {
                 sp: ctx.Esp as u64,
                 bp: ctx.Ebp as u64,
@@ -714,39 +721,39 @@ impl Debugger {
         self.modules.get_instruction_at(ctx.ip as usize)
     }
 
-    pub fn op0_uses_mem(
-        &self,
-        ctx: &ThreadContext,
-        i: &iced_x86::Instruction,
-        mem_addr: usize,
-    ) -> bool {
-        match i.op0_kind() {
-            iced_x86::OpKind::Memory => {
-                let base = ctx.get(i.memory_base());
-                let displacement = i.memory_displacement32();
-                let addr = base as usize + displacement as usize;
-                addr == mem_addr
-            }
-            _ => false,
-        }
-    }
+    // pub fn op0_uses_mem(
+    //     &self,
+    //     ctx: &ThreadContext,
+    //     i: &iced_x86::Instruction,
+    //     mem_addr: usize,
+    // ) -> bool {
+    //     match i.op0_kind() {
+    //         iced_x86::OpKind::Memory => {
+    //             let base = ctx.get(i.memory_base());
+    //             let displacement = i.memory_displacement32();
+    //             let addr = base as usize + displacement as usize;
+    //             addr == mem_addr
+    //         }
+    //         _ => false,
+    //     }
+    // }
 
-    pub fn op1_uses_mem(
-        &self,
-        ctx: &ThreadContext,
-        i: &iced_x86::Instruction,
-        mem_addr: usize,
-    ) -> bool {
-        match i.op1_kind() {
-            iced_x86::OpKind::Memory => {
-                let base = ctx.get(i.memory_base());
-                let displacement = i.memory_displacement32();
-                let addr = base as usize + displacement as usize;
-                addr == mem_addr
-            }
-            _ => false,
-        }
-    }
+    // pub fn op1_uses_mem(
+    //     &self,
+    //     ctx: &ThreadContext,
+    //     i: &iced_x86::Instruction,
+    //     mem_addr: usize,
+    // ) -> bool {
+    //     match i.op1_kind() {
+    //         iced_x86::OpKind::Memory => {
+    //             let base = ctx.get(i.memory_base());
+    //             let displacement = i.memory_displacement32();
+    //             let addr = base as usize + displacement as usize;
+    //             addr == mem_addr
+    //         }
+    //         _ => false,
+    //     }
+    // }
 
     pub fn format_op0(&self, ctx: &ThreadContext, i: &iced_x86::Instruction, std: &mut String) {
         match i.op0_kind() {
@@ -805,15 +812,15 @@ impl Debugger {
         }
     }
 
-    pub fn uses_mem(&self, addr: usize) -> bool {
-        match self.get_current_instruction() {
-            Some((_, i)) => {
-                let ctx = self.get_current_thread_context();
-                self.op0_uses_mem(&ctx, i, addr) || self.op1_uses_mem(&ctx, i, addr)
-            }
-            None => false,
-        }
-    }
+    // pub fn uses_mem(&self, addr: usize) -> bool {
+    //     match self.get_current_instruction() {
+    //         Some((_, i)) => {
+    //             let ctx = self.get_current_thread_context();
+    //             self.op0_uses_mem(&ctx, i, addr) || self.op1_uses_mem(&ctx, i, addr)
+    //         }
+    //         None => false,
+    //     }
+    // }
 
     pub fn format_instruction(&self, i: &iced_x86::Instruction) -> String {
         let ctx = self.get_current_thread_context();

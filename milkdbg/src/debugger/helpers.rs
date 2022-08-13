@@ -81,7 +81,7 @@ pub fn read_string_char_by_char(
     String::from_utf8(name)
 }
 
-pub fn read_string_char_by_char_unchecked(
+pub fn read_utf8_string_char_by_char_unchecked(
     process: winapi::um::winnt::HANDLE,
     mut addr: usize,
 ) -> Result<String, u32> {
@@ -99,6 +99,31 @@ pub fn read_string_char_by_char_unchecked(
         }
     }
     unsafe { Ok(String::from_utf8_unchecked(name)) }
+}
+
+
+pub fn read_utf16_string_char_by_char_unchecked(
+    process: winapi::um::winnt::HANDLE,
+    mut addr: usize,
+) -> Result<String, u32> {
+    if addr == 0 {
+        return Ok("".to_string());
+    }
+    let mut s = vec![];
+    loop {
+        if s.len() >= 1024 {
+            break;
+        }
+        let c = read_process_memory(process, addr, 2)?;
+        if c[0] == 0 && c[1] == 0 {
+            break;
+        } else {
+            let v = u16::from_le_bytes([c[0], c[1]]); 
+            s.push(v);
+            addr += 2;
+        }
+    }
+    Ok(String::from_utf16(&s).unwrap())
 }
 
 #[derive(Debug, Clone)]
@@ -144,7 +169,7 @@ pub fn read_value_from_stack_as_ptr_to_string(
 ) -> Result<Value, u32> {
     let addr = ctx.Esp as usize;
     let ptr = parse_at::<u32>(addr + ((i + 1) * 4), process)?;
-    let s = read_string_char_by_char_unchecked(process, ptr as usize)?;
+    let s = read_utf8_string_char_by_char_unchecked(process, ptr as usize)?;
     Ok(Value::String(s))
 }
 

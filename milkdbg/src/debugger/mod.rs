@@ -5,14 +5,10 @@ mod modules;
 mod w32;
 mod wow64;
 
-use std::io::Write;
-
+use std::io::{Write, stdout};
 use flume::*;
-
 use known_api::*;
-use log::kv::Source;
-
-use self::{debugger::ThreadContext, modules::FunctionInfo};
+use self::{debugger::ThreadContext};
 
 #[derive(Debug)]
 pub enum Commands {
@@ -37,8 +33,7 @@ pub fn spawn(cmds: Receiver<Commands>) {
     let (s, r) = unbounded();
 
     let _ = std::thread::spawn(move || -> ! {
-        let _ = std::fs::remove_file("print.txt");
-        let mut f = std::fs::File::create(".print").unwrap();
+        let f = stdout();
         let mut f = std::io::BufWriter::new(f);
         let mut dbg = debugger::Debugger::new();
         loop {
@@ -53,8 +48,8 @@ pub fn spawn(cmds: Receiver<Commands>) {
                     dbg.go();
                     let _ = callback.send(());
                 }
-                Ok(Commands::GoUntilUsesMem(addr, callback)) => {
-                    let a = dbg.add_breakpoint_memory(addr);
+                Ok(Commands::GoUntilUsesMem(addr, _)) => {
+                    let _ = dbg.add_breakpoint_memory(addr);
                     loop {
                         dbg.go();
 
@@ -114,30 +109,25 @@ pub fn spawn(cmds: Receiver<Commands>) {
                     let _ = callback.send(i);
                 }
                 Ok(Commands::Print(arguments, callback)) => {
-                    use json_color::Colorizer;
-                    let colorizer = Colorizer::arbitrary();
+                    // use json_color::Colorizer;
+                    // let colorizer = Colorizer::arbitrary();
                     for arg in arguments {
-                        let s = match arg {
+                        match arg {
                             serde_json::Value::String(s) => {
-                                // print!("{} ", s);
-                                write!(f, "{} ", s);
+                                let _ = write!(f, "{} ", s);
                             }
                             serde_json::Value::Number(n) => {
                                 let s = format!("{}", n);
-                                // print!("{} ", s);
-                                write!(f, "{} ", s);
+                                let _ = write!(f, "{} ", s);
                             }
                             x => {
                                 let s = x.to_string();
-                                write!(f, "{} ", s);
-                                // let s = colorizer.colorize_json_str(s.as_str()).unwrap();
-                                // print!("{} ", s);
+                                let _ = write!(f, "{} ", s);
                             }
                         };
                     }
-                    // println!("");
-                    write!(f, "\n");
-                    // f.flush();
+                    let _ = write!(f, "\n");
+                    let _ = f.flush();
                     let _ = callback.send(());
                 }
                 Ok(Commands::CurrentStackFrame(callback)) => {
@@ -219,11 +209,11 @@ pub fn spawn(cmds: Receiver<Commands>) {
                 }
                 Ok(Commands::WriteFile(path, bytes, callback)) => {
                     let _ = std::fs::write(path, bytes.as_slice()).unwrap();
-                    callback.send(());
+                    let _ = callback.send(());
                 }
                 Ok(Commands::GetFunctionAt(addr, callback)) => {
                     let f = dbg.get_function_at(addr as usize).unwrap_or_default();
-                    callback.send(f);
+                    let _ = callback.send(f);
                 }
                 Err(_) => todo!(),
             }
