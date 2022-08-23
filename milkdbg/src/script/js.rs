@@ -114,6 +114,7 @@ impl JavascriptEngine {
             gen_method! {scope, global, s, getCurrentInstructionString}
             gen_method! {scope, global, s, writeFile}
             gen_method! {scope, global, s, getFunctionAt}
+            gen_method! {scope, global, s, traceFunction}
 
             loop {
                 let code = r.recv();

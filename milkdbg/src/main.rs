@@ -95,9 +95,16 @@ async fn jsevent_to_dbgcmd(
                     "currentStackFrame" => {
                         let (s, r) = bounded(1);
                         let _ = dbg.send(Commands::CurrentStackFrame(s));
-                        let r = r.recv_async().await.unwrap().unwrap();
-                        let r = serde_json::to_value(r).unwrap();
-                        let _ = script.send(script::Commands::Resolve(resolver, r));
+                        match r.recv_async().await {
+                            Ok(Some(call)) => {
+                                let json = serde_json::to_value(call).unwrap();
+                                let _ = script.send(script::Commands::Resolve(resolver, json));
+                            },
+                            _ => {
+                                let json = serde_json::Value::Null;
+                                let _ = script.send(script::Commands::Resolve(resolver, json));
+                            }
+                        };                      
                     }
                     "getThreadContext" => {
                         let (s, r) = bounded(1);
@@ -155,6 +162,15 @@ async fn jsevent_to_dbgcmd(
 
                         let addr = arguments[0].as_u64().unwrap();
                         let _ = dbg.send(Commands::GetFunctionAt(addr, s));
+                        let f = r.recv_async().await.unwrap();
+                        let r = serde_json::to_value(f).unwrap();
+                        let _ = script.send(script::Commands::Resolve(resolver, r));
+                    }
+                    "traceFunction" => {
+                        let (s, r) = bounded(1);
+
+                        let addr = arguments[0].as_u64().unwrap();
+                        let _ = dbg.send(Commands::TraceFunctionAt(addr, s));
                         let f = r.recv_async().await.unwrap();
                         let r = serde_json::to_value(f).unwrap();
                         let _ = script.send(script::Commands::Resolve(resolver, r));

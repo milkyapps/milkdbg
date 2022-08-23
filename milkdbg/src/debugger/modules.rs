@@ -218,12 +218,13 @@ impl Modules {
             let mem = read_process_memory(process, base_addr, size).unwrap();
 
             for addr in 0..size {
-                if mem[addr + 0] == 0x55 && mem[addr + 1] == 0x89
-                /*&& mem[addr + 2] == 0xe5*/
+                if (mem[addr + 0] == 0x55 && mem[addr + 1] == 0x89)
+                || ((addr > 2) && (mem[addr - 2] == 0xcc && mem[addr - 1] == 0xcc))
                 {
                     let name = format!("f_{:X?}", base_addr + addr);
                     newfunctions.push((name, base_addr + addr));
                 }
+
             }
         }
 

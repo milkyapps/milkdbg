@@ -102,6 +102,8 @@ pub enum Breakpoint {
         location: usize,
         original_value: Vec<u8>,
         once: bool,
+        trace: bool,
+        go: bool
     },
     KnowApi {
         location: usize,
@@ -173,6 +175,24 @@ impl Debugger {
             location,
             original_value,
             once,
+            trace: false,
+            go: false
+        });
+        self.breakpoints.len() - 1
+    }
+
+    pub fn add_breakpoint_trace(&mut self, location: usize, once: bool) -> usize {
+        // trace!("add_breakpoint_trace: {}", location);
+
+        let original_value = self.set_cc(location);
+        self.breakpoints_locations
+            .insert(location, self.breakpoints.len());
+        self.breakpoints.push(Breakpoint::Simple {
+            location,
+            original_value,
+            once,
+            trace: true,
+            go: true
         });
         self.breakpoints.len() - 1
     }
@@ -328,6 +348,8 @@ impl Debugger {
     pub fn go(&mut self) {
         trace!(target:"debugger", "go - begin");
 
+        self.current_known_call = None;
+
         loop {
             if self.last_debug_event.dwProcessId != 0 {
                 self.continue_debug_event(
@@ -412,6 +434,15 @@ impl Debugger {
                                                 debug!(target:"debugger", "Know Call: {:?}", call);
                                                 self.current_known_call = Some(call);
                                             }
+                                            Breakpoint::Simple { trace, ..} if *trace=> {
+                                                let s = if let Some((addr, i)) = self.get_current_instruction() {
+                                                    let s = self.format_instruction(i);
+                                                    format!("0x{:X} {}", addr, s)
+                                                } else {
+                                                    format!("<ERROR>")
+                                                };
+                                                println!("{}", s);
+                                            }
                                             _ => {}
                                         };
 
@@ -468,6 +499,14 @@ impl Debugger {
                                         .and_then(|index| self.breakpoints.get(index))
                                     {
                                         self.reactivate_breakpoint(b);
+
+                                        match b {
+                                            Breakpoint::Simple { go, ..} if *go => {
+                                                self.break_on_next_single_step = false;
+                                                continue;
+                                            }
+                                            _ => {}
+                                        }
                                     }
 
                                     if self.break_on_next_single_step {
@@ -708,8 +747,8 @@ impl Debugger {
         Ok(())
     }
 
-    pub fn read_memory<T: Clone>(&self, addr: usize) -> T {
-        parse_at(addr, self.process).unwrap()
+    pub fn read_memory<T: Clone>(&self, addr: usize) -> Result<T, u32> {
+        parse_at(addr, self.process)
     }
 
     pub fn read_array_memory<T: Clone>(&self, qty: usize, addr: usize) -> Vec<T> {
@@ -861,5 +900,19 @@ impl Debugger {
                 args: Default::default(),
             }),
         }
+    }
+
+    pub fn trace_function_at(&mut self, addr: usize) -> Option<()> {
+        trace!("trace_function_at: {:X}", addr);
+
+        
+        let (mut addr, instructions) = self.modules.get_instructions_at(addr)?.clone();
+        debug!("{:X}, {}",  addr, instructions.len());
+        for i in instructions {
+            self.add_breakpoint_trace(addr, false);
+            addr += i.len();
+        }
+
+        Some(())
     }
 }

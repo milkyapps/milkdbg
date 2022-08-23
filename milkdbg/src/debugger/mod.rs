@@ -27,6 +27,7 @@ pub enum Commands {
     GetCurrentInstructionString(Sender<String>),
     WriteFile(String, Vec<u8>, Sender<()>),
     GetFunctionAt(u64, Sender<KnownCall>),
+    TraceFunctionAt(u64, Sender<()>),
 }
 
 pub fn spawn(cmds: Receiver<Commands>) {
@@ -150,20 +151,24 @@ pub fn spawn(cmds: Receiver<Commands>) {
                 Ok(Commands::ReadMemory(t, addr, callback)) => {
                     let v = match t.as_str() {
                         "u8" | "U8" => {
-                            let v = dbg.read_memory::<u8>(addr);
-                            serde_json::Value::Number(v.into())
+                            dbg.read_memory::<u8>(addr)
+                                .map(|v| serde_json::Value::Number(v.into()))
+                                .unwrap_or(serde_json::Value::Null)
                         }
                         "u16" | "U16" => {
-                            let v = dbg.read_memory::<u16>(addr);
-                            serde_json::Value::Number(v.into())
+                            dbg.read_memory::<u16>(addr)
+                            .map(|v| serde_json::Value::Number(v.into()))
+                            .unwrap_or(serde_json::Value::Null)
                         }
                         "u32" | "U32" => {
-                            let v = dbg.read_memory::<u32>(addr);
-                            serde_json::Value::Number(v.into())
+                            dbg.read_memory::<u32>(addr)
+                            .map(|v| serde_json::Value::Number(v.into()))
+                            .unwrap_or(serde_json::Value::Null)
                         }
                         "f32" | "F32" => {
-                            let v = dbg.read_memory::<f32>(addr);
-                            serde_json::json!(v as f64)
+                            dbg.read_memory::<f32>(addr)
+                            .map(|v| serde_json::json!{v})
+                            .unwrap_or(serde_json::Value::Null)
                         }
                         _ => todo!(),
                     };
@@ -214,6 +219,10 @@ pub fn spawn(cmds: Receiver<Commands>) {
                 Ok(Commands::GetFunctionAt(addr, callback)) => {
                     let f = dbg.get_function_at(addr as usize).unwrap_or_default();
                     let _ = callback.send(f);
+                }
+                Ok(Commands::TraceFunctionAt(addr, callback)) => {
+                    dbg.trace_function_at(addr as usize);
+                    let _ = callback.send(());
                 }
                 Err(_) => todo!(),
             }
